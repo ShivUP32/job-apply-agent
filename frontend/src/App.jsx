@@ -875,7 +875,7 @@ while True:
             ) : (
               <div style={{ color: "#3a4060", fontSize: 14, textAlign: "center", padding: "3rem" }}>No applications yet today. Run the agent to start.</div>
             )}
-            {(DEFAULT_WEBHOOK_URL && profile.google_sheet_url) && (
+            {profile.google_sheet_url && (
               <div style={{ marginTop: "1.5rem", padding: "14px 20px", background: "#0f2e1a", border: "1px solid #4ade8040", borderRadius: 10, fontSize: 13, color: "#4ade80" }}>
                 ✓ Google Sheets logging active — every application is auto-logged with score, company and status.
               </div>
