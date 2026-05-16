@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "ApplyPilot",
+  "version": "1.0.0",
+  "description": "Automatically apply to jobs on LinkedIn, Naukri, Indeed and more — right from your own browser.",
+  "permissions": ["storage", "tabs", "scripting"],
+  "host_permissions": [
+    "https://www.linkedin.com/*",
+    "https://www.naukri.com/*",
+    "https://in.indeed.com/*",
+    "https://www.glassdoor.co.in/*",
+    "https://www.foundit.in/*",
+    "https://job-hunt-agent-iota.vercel.app/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "ApplyPilot"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://job-hunt-agent-iota.vercel.app/*"],
+      "js": ["content/bridge.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

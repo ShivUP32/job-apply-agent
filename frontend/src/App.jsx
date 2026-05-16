@@ -3,13 +3,7 @@ import * as pdfjsLib from "pdfjs-dist";
 import pdfjsWorker from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
-const API = import.meta.env.VITE_API_URL || "http://localhost:8000";
-
-// Central webhook URL — deploy the Apps Script below once, then replace this value with your deployment URL
-const DEFAULT_WEBHOOK_URL = import.meta.env.VITE_SHEETS_WEBHOOK_URL || "";
-
-// Secret token sent with every request — must match WEBHOOK_SECRET in Apps Script Properties
-const WEBHOOK_SECRET = import.meta.env.VITE_SHEETS_WEBHOOK_SECRET || "";
+const EXT_URL = "https://job-hunt-agent-iota.vercel.app"; // keep in sync with manifest host_permissions
 
 const APPS_SCRIPT_CODE = `// SETUP — Script Properties (⚙ Project Settings → Script Properties):
 //   WEBHOOK_SECRET  = <your long random secret>
@@ -96,12 +90,12 @@ function safeSheetUrl(url) {
 }
 
 function App() {
-  const [tab, setTab] = useState("profile");
+  const [tab, setTab] = useState(() => window.__APPLYPILOT_INSTALLED ? "profile" : "setup");
   const [saved, setSaved] = useState(false);
   const [running, setRunning] = useState(false);
   const [logs, setLogs] = useState([]);
   const [stats, setStats] = useState({ applied_today: 0, applied_jobs: [] });
-  const [backendOk, setBackendOk] = useState(null);
+  const [extInstalled, setExtInstalled] = useState(() => !!window.__APPLYPILOT_INSTALLED);
   const [saving, setSaving] = useState(false);
   const [selectedPlatforms, setSelectedPlatforms] = useState(["naukri", "linkedin"]);
   const [schedule, setSchedule] = useState("manual");
@@ -113,7 +107,6 @@ function App() {
     portfolio_url: "", github_url: "", other_url_1: "", other_url_2: "",
     resume_text: "",
     resume_pdf_name: "",
-    resume_pdf_data: "",
     target_roles: [""],
     target_location: "India",
     experience_years: 3,
@@ -122,36 +115,28 @@ function App() {
     notice_period: "30 days",
     min_match_score: 70,
     max_applications: 20,
+    groq_api_key: "",
     google_sheet_url: "",
   });
 
-  // Check backend health
+  // Listen for extension messages
   useEffect(() => {
-    fetch(`${API}/health`).then(r => r.json()).then(() => setBackendOk(true)).catch(() => setBackendOk(false));
-  }, []);
-
-  // Poll logs + status when running
-  useEffect(() => {
-    if (!running) return;
-    const t = setInterval(async () => {
-      try {
-        const [l, s] = await Promise.all([
-          fetch(`${API}/logs`).then(r => r.json()),
-          fetch(`${API}/status`).then(r => r.json()),
-        ]);
-        setLogs(l.logs || []);
-        setRunning(l.running);
-        setStats(s);
+    const handler = (e) => {
+      if (!e.data?.type) return;
+      if (e.data.type === "APPLYPILOT_READY") {
+        setExtInstalled(true);
+      }
+      if (e.data.type === "APPLYPILOT_STATE") {
+        setRunning(!!e.data.running);
+        if (e.data.logs)  { setLogs(e.data.logs); }
+        if (e.data.stats) { setStats(e.data.stats); }
         if (logsRef.current) logsRef.current.scrollTop = logsRef.current.scrollHeight;
-      } catch {}
-    }, 2000);
-    return () => clearInterval(t);
-  }, [running]);
-
-  // Also fetch status on mount
-  useEffect(() => {
-    fetch(`${API}/status`).then(r => r.json()).then(s => { setStats(s); setRunning(s.running); }).catch(() => {});
-    fetch(`${API}/logs`).then(r => r.json()).then(l => { setLogs(l.logs || []); setRunning(l.running); }).catch(() => {});
+      }
+    };
+    window.addEventListener("message", handler);
+    // Re-check in case bridge.js already ran before this effect
+    setTimeout(() => { if (window.__APPLYPILOT_INSTALLED) setExtInstalled(true); }, 200);
+    return () => window.removeEventListener("message", handler);
   }, []);
 
   const p = (k, v) => setProfile(prev => ({ ...prev, [k]: v }));
@@ -197,7 +182,7 @@ function App() {
     }
   };
 
-  const saveProfile = async () => {
+  const saveProfile = () => {
     if (!profile.first_name.trim() || !profile.email.trim()) {
       alert("First name and email are required before saving.");
       return;
@@ -206,33 +191,38 @@ function App() {
       alert("Add at least one target job title before saving.");
       return;
     }
+    if (!extInstalled) {
+      alert("Please install the ApplyPilot browser extension first.");
+      return;
+    }
     setSaving(true);
-    try {
-      const payload = { ...profile, platforms: selectedPlatforms, sheets_webhook_url: DEFAULT_WEBHOOK_URL, sheets_webhook_secret: WEBHOOK_SECRET };
-      const r = await fetch(`${API}/save-profile`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const d = await r.json();
-      if (d.ok) { setSaved(true); setTimeout(() => setSaved(false), 3000); }
-    } catch (e) { alert("Could not reach backend. Is it running?"); }
-    setSaving(false);
+    const payload = { ...profile, platforms: selectedPlatforms };
+    window.postMessage({ type: "APPLYPILOT_SAVE_PROFILE", profile: payload }, "*");
+    // Listen for ack
+    const ack = (e) => {
+      if (e.data?.type === "APPLYPILOT_SAVED") {
+        window.removeEventListener("message", ack);
+        setSaving(false);
+        setSaved(true);
+        setTimeout(() => setSaved(false), 3000);
+      }
+    };
+    window.addEventListener("message", ack);
+    // Timeout fallback
+    setTimeout(() => { window.removeEventListener("message", ack); setSaving(false); }, 3000);
   };
 
-  const startBot = async () => {
+  const startBot = () => {
+    if (!extInstalled) { alert("Please install the ApplyPilot extension first."); return; }
     setTab("logs");
     setLogs([]);
-    const r = await fetch(`${API}/run`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(selectedPlatforms),
-    }).then(r => r.json()).catch(() => ({ ok: false }));
-    if (r.ok) setRunning(true);
+    const payload = { ...profile, platforms: selectedPlatforms };
+    window.postMessage({ type: "APPLYPILOT_RUN", platforms: selectedPlatforms, profile: payload }, "*");
+    setRunning(true);
   };
 
-  const stopBot = async () => {
-    await fetch(`${API}/stop`, { method: "POST" }).catch(() => {});
+  const stopBot = () => {
+    window.postMessage({ type: "APPLYPILOT_STOP" }, "*");
     setRunning(false);
   };
 
@@ -245,7 +235,7 @@ function App() {
           <span style={{ color: "#4ade80" }}>Apply</span>Pilot
         </div>
         <div style={{ display: "flex", gap: 4, flex: 1 }}>
-          {[["profile","Profile"],["platforms","Platforms"],["schedule","Schedule"],["logs","Logs"],["tracker","Tracker"]].map(([id, label]) => (
+          {[["setup", extInstalled ? "✓ Setup" : "⚡ Setup"], ["profile","Profile"],["platforms","Platforms"],["schedule","Schedule"],["logs","Logs"],["tracker","Tracker"]].map(([id, label]) => (
             <button key={id} onClick={() => setTab(id)} style={{
               background: tab === id ? "#1a1f2e" : "none",
               border: tab === id ? "1px solid #2a3148" : "1px solid transparent",
@@ -255,17 +245,178 @@ function App() {
           ))}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <div style={{ width: 8, height: 8, borderRadius: "50%", background: backendOk === null ? "#7a849e" : backendOk ? "#4ade80" : "#f87171", boxShadow: backendOk ? "0 0 8px #4ade8088" : "none" }} />
-          <span style={{ fontSize: 12, color: "#7a849e" }}>{backendOk === null ? "checking..." : backendOk ? "backend connected" : "backend offline"}</span>
+          <div style={{ width: 8, height: 8, borderRadius: "50%", background: extInstalled ? "#4ade80" : "#f87171", boxShadow: extInstalled ? "0 0 8px #4ade8088" : "none" }} />
+          <span style={{ fontSize: 12, color: extInstalled ? "#4ade80" : "#f87171" }}>
+            {extInstalled ? "extension connected" : "extension not detected"}
+          </span>
         </div>
         {running ? (
           <button onClick={stopBot} style={{ background: "#3f1515", border: "1px solid #f87171", color: "#f87171", borderRadius: 6, padding: "6px 16px", cursor: "pointer", fontSize: 13, fontFamily: "inherit" }}>⏹ Stop</button>
         ) : (
-          <button onClick={startBot} style={{ background: "#0f2e1a", border: "1px solid #4ade80", color: "#4ade80", borderRadius: 6, padding: "6px 16px", cursor: "pointer", fontSize: 13, fontFamily: "inherit", opacity: backendOk ? 1 : 0.4 }}>▶ Run now</button>
+          <button onClick={startBot} style={{ background: "#0f2e1a", border: "1px solid #4ade80", color: "#4ade80", borderRadius: 6, padding: "6px 16px", cursor: "pointer", fontSize: 13, fontFamily: "inherit", opacity: extInstalled ? 1 : 0.4 }}>▶ Run now</button>
         )}
       </nav>
 
+      {/* Extension offline banner (compact, shown on all tabs except setup) */}
+      {!extInstalled && tab !== "setup" && (
+        <div style={{ background: "#1a0f00", borderBottom: "1px solid #f59e0b40", padding: "10px 2rem", display: "flex", alignItems: "center", gap: 12 }}>
+          <span style={{ fontSize: 13, color: "#fbbf24", flex: 1 }}>
+            ⚡ Extension not installed — the bot can't run without it.
+          </span>
+          <button onClick={() => setTab("setup")} style={{ fontSize: 12, color: "#fbbf24", background: "none", border: "1px solid #f59e0b60", borderRadius: 5, padding: "4px 14px", cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>
+            Setup guide →
+          </button>
+        </div>
+      )}
+      {/* Extension connected banner */}
+      {extInstalled && (
+        <div style={{ background: "#0d1a0d", borderBottom: "1px solid #4ade8030", padding: "8px 2rem", fontSize: 12, color: "#4ade80" }}>
+          ✓ Extension connected — the bot will run directly in your browser using your existing login sessions.
+        </div>
+      )}
+
       <div style={{ maxWidth: 860, margin: "0 auto", padding: "2rem 1.5rem" }}>
+
+        {/* ── SETUP TAB ── */}
+        {tab === "setup" && (
+          <div>
+            <h2 style={{ fontSize: 20, fontWeight: 500, marginBottom: "0.4rem", color: "#fff" }}>Setup</h2>
+            <p style={{ fontSize: 14, color: "#7a849e", marginBottom: "2rem" }}>
+              ApplyPilot runs entirely in your own browser — no cloud server, no scripts to install. One-time setup takes about 2 minutes.
+            </p>
+
+            {extInstalled && (
+              <div style={{ background: "#0d1a0d", border: "1px solid #4ade8060", borderRadius: 10, padding: "16px 20px", marginBottom: "1.5rem", display: "flex", alignItems: "center", gap: 12 }}>
+                <div style={{ fontSize: 22 }}>✅</div>
+                <div>
+                  <div style={{ fontWeight: 500, color: "#4ade80", marginBottom: 3 }}>Extension installed and connected</div>
+                  <div style={{ fontSize: 13, color: "#7a849e" }}>You're all set. Fill your profile, pick platforms, and press Run now.</div>
+                </div>
+                <button onClick={() => setTab("profile")} style={{ marginLeft: "auto", background: "#4ade80", color: "#000", border: "none", borderRadius: 6, padding: "8px 20px", cursor: "pointer", fontWeight: 600, fontSize: 13, fontFamily: "inherit", whiteSpace: "nowrap" }}>
+                  Go to Profile →
+                </button>
+              </div>
+            )}
+
+            {/* Step 1 */}
+            <div style={{ background: "#13161f", border: "1px solid #1e2330", borderRadius: 12, padding: "20px 24px", marginBottom: "1rem" }}>
+              <div style={{ display: "flex", gap: 16, alignItems: "flex-start" }}>
+                <div style={{ width: 28, height: 28, borderRadius: "50%", background: "#4ade8022", border: "1.5px solid #4ade8060", display: "flex", alignItems: "center", justifyContent: "center", color: "#4ade80", fontWeight: 700, fontSize: 13, flexShrink: 0 }}>1</div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 500, color: "#fff", marginBottom: 6 }}>Download the extension</div>
+                  <p style={{ fontSize: 13, color: "#7a849e", marginBottom: 14, lineHeight: 1.6 }}>
+                    Download the ApplyPilot extension as a ZIP file. You'll load it into Chrome in the next step — no Chrome Web Store needed.
+                  </p>
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                    <a
+                      href="https://github.com/ShivUP32/job-apply-agent/archive/refs/heads/main.zip"
+                      style={{ display: "inline-flex", alignItems: "center", gap: 7, background: "#4ade80", color: "#000", borderRadius: 7, padding: "9px 20px", fontWeight: 600, fontSize: 13, textDecoration: "none", fontFamily: "inherit" }}
+                    >
+                      ⬇ Download ApplyPilot.zip
+                    </a>
+                    <a
+                      href="https://github.com/ShivUP32/job-apply-agent/tree/main/extension"
+                      target="_blank" rel="noopener noreferrer"
+                      style={{ display: "inline-flex", alignItems: "center", gap: 7, background: "none", color: "#7a849e", border: "1px solid #2a3148", borderRadius: 7, padding: "9px 18px", fontSize: 13, textDecoration: "none", fontFamily: "inherit" }}
+                    >
+                      View on GitHub ↗
+                    </a>
+                  </div>
+                  <p style={{ fontSize: 12, color: "#3a4060", marginTop: 10 }}>
+                    After downloading, unzip the file. You'll see a folder called <code style={{ background: "#0b0d11", padding: "1px 5px", borderRadius: 3, color: "#7a849e" }}>job-apply-agent-main</code> — the extension is inside the <code style={{ background: "#0b0d11", padding: "1px 5px", borderRadius: 3, color: "#7a849e" }}>extension/</code> subfolder.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Step 2 */}
+            <div style={{ background: "#13161f", border: "1px solid #1e2330", borderRadius: 12, padding: "20px 24px", marginBottom: "1rem" }}>
+              <div style={{ display: "flex", gap: 16, alignItems: "flex-start" }}>
+                <div style={{ width: 28, height: 28, borderRadius: "50%", background: "#4ade8022", border: "1.5px solid #4ade8060", display: "flex", alignItems: "center", justifyContent: "center", color: "#4ade80", fontWeight: 700, fontSize: 13, flexShrink: 0 }}>2</div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 500, color: "#fff", marginBottom: 6 }}>Load the extension in Chrome</div>
+                  <p style={{ fontSize: 13, color: "#7a849e", marginBottom: 12, lineHeight: 1.6 }}>
+                    Open Chrome's extensions page and load the extension folder:
+                  </p>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                    {[
+                      { n: "a", text: <>Open <a href="chrome://extensions" style={{ color: "#4ade80", textDecoration: "none", fontFamily: "monospace", fontSize: 12 }}>chrome://extensions</a> in a new tab (copy-paste the link — Chrome won't let you click it directly).</> },
+                      { n: "b", text: <>Turn on <strong style={{ color: "#e2e6f0" }}>Developer mode</strong> using the toggle in the top-right corner of that page.</> },
+                      { n: "c", text: <>Click <strong style={{ color: "#e2e6f0" }}>Load unpacked</strong> and select the <code style={{ background: "#0b0d11", padding: "1px 5px", borderRadius: 3, color: "#4ade80" }}>extension/</code> folder you extracted in Step 1.</> },
+                      { n: "d", text: <>You should see <strong style={{ color: "#e2e6f0" }}>ApplyPilot</strong> appear in your extension list with a green puzzle-piece icon.</> },
+                    ].map(({ n, text }) => (
+                      <div key={n} style={{ display: "flex", gap: 12, alignItems: "flex-start", fontSize: 13, color: "#7a849e" }}>
+                        <span style={{ background: "#1a1f2e", border: "1px solid #2a3148", borderRadius: 4, padding: "1px 7px", fontSize: 11, color: "#8090b0", flexShrink: 0, marginTop: 1 }}>{n}</span>
+                        <span style={{ lineHeight: 1.6 }}>{text}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Step 3 */}
+            <div style={{ background: "#13161f", border: "1px solid #1e2330", borderRadius: 12, padding: "20px 24px", marginBottom: "1rem" }}>
+              <div style={{ display: "flex", gap: 16, alignItems: "flex-start" }}>
+                <div style={{ width: 28, height: 28, borderRadius: "50%", background: "#4ade8022", border: "1.5px solid #4ade8060", display: "flex", alignItems: "center", justifyContent: "center", color: "#4ade80", fontWeight: 700, fontSize: 13, flexShrink: 0 }}>3</div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 500, color: "#fff", marginBottom: 6 }}>Log in to your job sites</div>
+                  <p style={{ fontSize: 13, color: "#7a849e", marginBottom: 12, lineHeight: 1.6 }}>
+                    The bot uses <strong style={{ color: "#e2e6f0" }}>your existing Chrome login sessions</strong> — no passwords stored anywhere. Make sure you're already logged in before pressing Run.
+                  </p>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                    {[
+                      { label: "LinkedIn", url: "https://www.linkedin.com/login" },
+                      { label: "Naukri", url: "https://www.naukri.com/nlogin/login" },
+                      { label: "Indeed", url: "https://in.indeed.com/account/login" },
+                      { label: "Glassdoor", url: "https://www.glassdoor.co.in/profile/login_input.htm" },
+                      { label: "Foundit", url: "https://www.foundit.in/login" },
+                    ].map(({ label, url }) => (
+                      <a key={label} href={url} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12, color: "#8090b0", background: "#0b0d11", border: "1px solid #1e2330", borderRadius: 5, padding: "5px 12px", textDecoration: "none" }}>
+                        {label} ↗
+                      </a>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Step 4 */}
+            <div style={{ background: "#13161f", border: "1px solid #1e2330", borderRadius: 12, padding: "20px 24px", marginBottom: "2rem" }}>
+              <div style={{ display: "flex", gap: 16, alignItems: "flex-start" }}>
+                <div style={{ width: 28, height: 28, borderRadius: "50%", background: "#4ade8022", border: "1.5px solid #4ade8060", display: "flex", alignItems: "center", justifyContent: "center", color: "#4ade80", fontWeight: 700, fontSize: 13, flexShrink: 0 }}>4</div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 500, color: "#fff", marginBottom: 6 }}>Refresh this page and fill your profile</div>
+                  <p style={{ fontSize: 13, color: "#7a849e", lineHeight: 1.6 }}>
+                    After loading the extension, refresh this page — the status indicator in the top-right will turn <strong style={{ color: "#4ade80" }}>green</strong>. Then head to the <strong style={{ color: "#e2e6f0" }}>Profile</strong> tab, fill in your details, and press <strong style={{ color: "#e2e6f0" }}>Run now</strong>. The bot opens job sites in new tabs and handles everything from there.
+                  </p>
+                  <button onClick={() => window.location.reload()} style={{ marginTop: 14, background: "#1a1f2e", color: "#4ade80", border: "1px solid #4ade8040", borderRadius: 6, padding: "7px 18px", cursor: "pointer", fontSize: 13, fontFamily: "inherit" }}>
+                    ↺ Refresh now
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* FAQ */}
+            <div style={{ background: "#0b0d11", border: "1px solid #1e2330", borderRadius: 10, padding: "16px 20px" }}>
+              <div style={{ fontSize: 12, fontWeight: 500, color: "#7a849e", textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 12 }}>FAQ</div>
+              {[
+                ["Is it safe? Do you store my passwords?", "No passwords are ever stored or sent anywhere. The bot logs in using the cookies already in your browser — the same way you're logged in right now."],
+                ["Does it work on all job sites?", "Currently supports LinkedIn Easy Apply, Naukri, and Indeed. Glassdoor and Foundit support is coming soon."],
+                ["Does my computer need to stay on?", "Yes — the bot runs in your Chrome browser, so keep your computer and browser open while it's running. You can use your computer normally in the meantime."],
+                ["What's the Groq API key for?", "Optional. It lets the bot use AI to score each job against your resume and skip poor matches. Free at console.groq.com. Without it, the bot uses keyword matching instead."],
+              ].map(([q, a]) => (
+                <div key={q} style={{ marginBottom: 14, paddingBottom: 14, borderBottom: "1px solid #1e2330" }}>
+                  <div style={{ fontSize: 13, color: "#e2e6f0", marginBottom: 5 }}>{q}</div>
+                  <div style={{ fontSize: 12, color: "#7a849e", lineHeight: 1.6 }}>{a}</div>
+                </div>
+              ))}
+              <div style={{ fontSize: 12, color: "#7a849e" }}>
+                Still stuck? <a href="https://github.com/ShivUP32/job-apply-agent/issues" target="_blank" rel="noopener noreferrer" style={{ color: "#4ade80" }}>Open an issue on GitHub →</a>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* ── PROFILE TAB ── */}
         {tab === "profile" && (
@@ -374,6 +525,19 @@ function App() {
               <textarea value={profile.resume_text} onChange={e => p("resume_text", e.target.value)}
                 placeholder={"YOUR NAME | Bangalore | you@email.com\n\nSUMMARY\nProduct Manager with 4 years...\n\nEXPERIENCE\nSenior PM — Acme Corp (2022–Present)\n- Led onboarding redesign, reduced time-to-value by 60%\n\nSKILLS\nSQL, Figma, Jira, roadmapping, A/B testing"}
                 style={{ ...inputStyle, height: 200, resize: "vertical", fontFamily: "monospace", fontSize: 12 }} />
+            </Section>
+
+            <Section title="AI Job Matching (optional)">
+              <Field
+                label="Groq API key"
+                value={profile.groq_api_key}
+                onChange={v => p("groq_api_key", v)}
+                placeholder="gsk_..."
+                type="password"
+              />
+              <p style={{ fontSize: 12, color: "#7a849e", marginTop: 8 }}>
+                Free at <strong style={{ color: "#e2e6f0" }}>console.groq.com</strong>. The extension uses it to score each job against your resume and skip poor matches. Without a key it falls back to keyword matching.
+              </p>
             </Section>
 
             <Section title="Google Sheets Setup">
@@ -662,17 +826,17 @@ while True:
                 <span style={{ fontSize: 13, color: running ? "#4ade80" : "#7a849e" }}>{running ? "running..." : "idle"}</span>
               </div>
             </div>
-            {backendOk === false && (
+            {!extInstalled && (
               <div style={{ marginBottom: 12, padding: "10px 16px", background: "#1f0a0a", border: "1px solid #f8717140", borderRadius: 8, fontSize: 13, color: "#f87171" }}>
-                ⚠ Backend offline — start it with <code style={{ background: "#0b0d11", padding: "1px 6px", borderRadius: 3 }}>python3 backend/server.py</code> then refresh.
+                ⚠ Extension not detected — install the ApplyPilot extension and refresh this page. Then log in to your job sites in Chrome before pressing Run.
               </div>
             )}
             <div ref={logsRef} style={{
               background: "#080a0e", border: "1px solid #1e2330", borderRadius: 10,
               padding: "16px", height: 420, overflowY: "auto", fontFamily: "monospace", fontSize: 12,
             }}>
-              {logs.length === 0 && backendOk === false && <span style={{ color: "#f87171" }}>Backend not connected. No logs to show.</span>}
-              {logs.length === 0 && backendOk !== false && <span style={{ color: "#3a4060" }}>No logs yet — press Run to start the agent.</span>}
+              {logs.length === 0 && !extInstalled && <span style={{ color: "#f87171" }}>Extension not connected. Install it and refresh.</span>}
+              {logs.length === 0 && extInstalled && <span style={{ color: "#3a4060" }}>No logs yet — press Run to start the agent.</span>}
               {logs.map((l, i) => (
                 <div key={i} style={{ marginBottom: 4, display: "flex", gap: 12 }}>
                   <span style={{ color: "#3a4060", flexShrink: 0 }}>{l.time}</span>
