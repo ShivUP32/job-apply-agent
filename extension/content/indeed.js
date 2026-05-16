@@ -61,17 +61,25 @@
       );
       if (!applyBtn) { log("  ✗ No Instant Apply button"); continue; }
 
+      // Snapshot the apply button's state before clicking
+      const applyBtnText = applyBtn.textContent?.trim();
       applyBtn.click();
       await sleep(3000);
 
-      // Detect if apply modal/flow opened — hard to verify generically
-      const applied_indicator = document.querySelector(".ia-PostApply, [class*='postApply'], [class*='successModal']");
-      if (applied_indicator) {
+      // Indeed's post-apply overlay lives inside a cross-origin iframe, so
+      // document.querySelector can't reach it. Instead we detect success by:
+      // 1. The apply button disappearing or changing label to "Applied"
+      // 2. A "Applied" badge appearing in the job card detail panel
+      const btnGone    = !document.querySelector("button[id*='indeedApplyButton'], .ia-IndeedApplyButton, button[aria-label*='Apply']");
+      const appliedTag = document.querySelector("[class*='applied' i], [aria-label*='Applied' i], [data-testid*='applied' i]");
+      const succeeded  = btnGone || !!appliedTag;
+
+      if (succeeded) {
         applied++;
         log(`  ✅ Applied! (${applied}/${maxApps})`);
         chrome.runtime.sendMessage({ type: "JOB_APPLIED", job: `${title} @ ${company}` });
       } else {
-        log("  ✗ Application status unclear — may need manual review");
+        log(`  ✗ Apply button still present after click — may need manual steps (${applyBtnText})`);
       }
 
       await sleep(2000 + Math.random() * 1000);

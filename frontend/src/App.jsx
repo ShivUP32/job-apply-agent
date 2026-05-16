@@ -115,7 +115,6 @@ function App() {
     notice_period: "30 days",
     min_match_score: 70,
     max_applications: 20,
-    groq_api_key: "",
     google_sheet_url: "",
   });
 
@@ -545,19 +544,6 @@ function App() {
                 style={{ ...inputStyle, height: 200, resize: "vertical", fontFamily: "monospace", fontSize: 12 }} />
             </Section>
 
-            <Section title="AI Job Matching (optional)">
-              <Field
-                label="Groq API key"
-                value={profile.groq_api_key}
-                onChange={v => p("groq_api_key", v)}
-                placeholder="gsk_..."
-                type="password"
-              />
-              <p style={{ fontSize: 12, color: "#7a849e", marginTop: 8 }}>
-                Free at <strong style={{ color: "#e2e6f0" }}>console.groq.com</strong>. The extension uses it to score each job against your resume and skip poor matches. Without a key it falls back to keyword matching.
-              </p>
-            </Section>
-
             <Section title="Google Sheets Setup">
               {/* Step 1: Google Sheet URL */}
               <div style={{ marginBottom: 20 }}>
@@ -577,8 +563,8 @@ function App() {
               <div style={{ background: "#0d1a0d", border: "1px solid #4ade8030", borderRadius: 8, padding: "14px 16px", marginBottom: 20 }}>
                 <div style={{ fontSize: 12, fontWeight: 500, color: "#4ade80", marginBottom: 10 }}>One-time setup</div>
                 {[
-                  <>In your Google Sheet: click <strong style={{ color: "#e2e6f0" }}>Share</strong> → add <span style={{ background: "#1a1f2e", border: "1px solid #2a3148", borderRadius: 4, padding: "1px 7px", color: "#4ade80", fontFamily: "monospace", fontSize: 11 }}>itsshiv555@gmail.com</span> → set role to <strong style={{ color: "#e2e6f0" }}>Editor</strong> → Send.</>,
-                  <>Copy your Sheet ID from the URL (the long string between <code style={{ background: "#080a0e", padding: "1px 5px", borderRadius: 3 }}>/d/</code> and <code style={{ background: "#080a0e", padding: "1px 5px", borderRadius: 3 }}>/edit</code>) and add it as <strong style={{ color: "#e2e6f0" }}>TARGET_SHEET_ID</strong> in the Apps Script Script Properties.</>,
+                  <>Open your Google Sheet, click <strong style={{ color: "#e2e6f0" }}>Extensions → Apps Script</strong> and paste the ApplyPilot logging script provided in the docs.</>,
+                  <>In Apps Script, go to <strong style={{ color: "#e2e6f0" }}>Project Settings → Script Properties</strong> and add <strong style={{ color: "#e2e6f0" }}>TARGET_SHEET_ID</strong> — the long string between <code style={{ background: "#080a0e", padding: "1px 5px", borderRadius: 3 }}>/d/</code> and <code style={{ background: "#080a0e", padding: "1px 5px", borderRadius: 3 }}>/edit</code> in your Sheet URL.</>,
                 ].map((step, i) => (
                   <div key={i} style={{ display: "flex", gap: 10, fontSize: 12, color: "#7a849e", marginBottom: i === 0 ? 8 : 0 }}>
                     <span style={{ color: "#4ade80", fontWeight: 600, flexShrink: 0 }}>{i + 1}.</span>

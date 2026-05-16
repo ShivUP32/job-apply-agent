@@ -22,9 +22,10 @@ from typing import List, Literal
 
 app = FastAPI(title="ApplyPilot Backend")
 
-# Restrict to the Vercel deployment via ALLOWED_ORIGINS env var; wildcard is dev-only
-_raw_origins = os.getenv("ALLOWED_ORIGINS", "*")
-_allowed_origins = ["*"] if _raw_origins == "*" else [o.strip() for o in _raw_origins.split(",")]
+# Restrict to the Vercel deployment. ALLOWED_ORIGINS must be set in production.
+# Falls back to localhost only for local dev; never allows a wildcard in production.
+_raw_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:8000")
+_allowed_origins = [o.strip() for o in _raw_origins.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins,

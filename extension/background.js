@@ -205,6 +205,30 @@ async function handle(msg) {
       return { ok: true };
     }
 
+    case "SCORE_JOB": {
+      // Proxy Groq scoring through the service worker — keeps the API key server-side
+      // and avoids CORS issues from job-board content script origins.
+      try {
+        const res = await fetch("https://job-hunt-agent-iota.vercel.app/api/score-job", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: msg.title,
+            description: msg.description,
+            target_roles: msg.target_roles,
+            experience_years: msg.experience_years,
+            resume_text: msg.resume_text,
+          }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const { score } = await res.json();
+        return { score: typeof score === "number" ? score : null };
+      } catch (e) {
+        await addLog(`⚠ Score API error: ${e.message} — using keyword fallback`);
+        return { score: null };
+      }
+    }
+
     case "JOB_APPLIED": {
       const today = new Date().toDateString();
       const { stats = { applied_today: 0, applied_jobs: [], date: today } } = await get(["stats"]);

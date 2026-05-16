@@ -58,39 +58,27 @@ window.__AP__ = {
     return Math.min(100, score || 35);
   },
 
-  // Groq-powered scorer (falls back to keyword if no key)
+  // Groq-powered scorer — routes through background SW so the API key never
+  // touches content scripts. Falls back to keyword scoring on any error.
   async scoreJob(title, description, profile) {
-    if (!profile.groq_api_key) return this.keywordScore(title, description, profile);
     try {
-      const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Authorization": "Bearer " + profile.groq_api_key,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "llama-3.3-70b-versatile",
-          messages: [{
-            role: "user",
-            content:
-              "Rate how well this job matches the candidate. Reply with ONLY a number 0-100, nothing else.\n\n" +
-              "Job title: " + title + "\n" +
-              "Job description (first 600 chars): " + description.slice(0, 600) + "\n\n" +
-              "Candidate target roles: " + (profile.target_roles || []).join(", ") + "\n" +
-              "Experience: " + profile.experience_years + " years\n" +
-              "Resume summary: " + (profile.resume_text || "").slice(0, 400) + "\n\nScore:",
-          }],
-          max_tokens: 5,
-          temperature: 0,
-        }),
+      const score = await new Promise((resolve, reject) => {
+        chrome.runtime.sendMessage(
+          {
+            type: "SCORE_JOB",
+            title,
+            description,
+            target_roles: profile.target_roles,
+            experience_years: profile.experience_years,
+            resume_text: profile.resume_text,
+          },
+          (r) => {
+            if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+            else resolve(r?.score);
+          }
+        );
       });
-      if (!res.ok) {
-        this.log(`⚠ Groq API error ${res.status} — falling back to keyword scoring`);
-        return this.keywordScore(title, description, profile);
-      }
-      const d = await res.json();
-      const n = parseInt(d.choices?.[0]?.message?.content?.trim());
-      return isNaN(n) ? this.keywordScore(title, description, profile) : n;
+      return typeof score === "number" ? score : this.keywordScore(title, description, profile);
     } catch {
       return this.keywordScore(title, description, profile);
     }
