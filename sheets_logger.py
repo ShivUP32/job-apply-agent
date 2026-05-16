@@ -6,6 +6,7 @@ No external dependencies — uses stdlib urllib only.
 
 import json
 import logging
+import threading
 import urllib.request
 from datetime import datetime
 
@@ -34,11 +35,7 @@ def log_application(
         return
 
     sheet_url = config.SHEETS.get("sheet_url", "")
-    if not sheet_url:
-        log.warning("Sheets sheet_url not configured — skipping log")
-        return
-
-    secret = config.SHEETS.get("webhook_secret", "")
+    secret    = config.SHEETS.get("webhook_secret", "")
 
     payload = {
         "secret":             secret,
@@ -54,19 +51,22 @@ def log_application(
         "notes":              notes,
     }
 
-    try:
-        body = json.dumps(payload).encode()
-        req  = urllib.request.Request(
-            webhook,
-            data=body,
-            headers={"Content-Type": "application/json"},
-            method="POST"
-        )
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            raw = resp.read().decode("utf-8", errors="replace")
-            if resp.status == 200 and raw.strip() == "ok":
-                log.info(f"📊 Sheets: logged '{job_title}' @ {company} → {status}")
-            else:
-                log.warning(f"Sheets log unexpected response (status={resp.status}): {raw[:200]}")
-    except Exception as e:
-        log.warning(f"Sheets log failed: {e}")
+    def _post():
+        try:
+            body = json.dumps(payload).encode()
+            req  = urllib.request.Request(
+                webhook,
+                data=body,
+                headers={"Content-Type": "application/json"},
+                method="POST"
+            )
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                raw = resp.read().decode("utf-8", errors="replace")
+                if resp.status == 200 and raw.strip() == "ok":
+                    log.info(f"📊 Sheets: logged '{job_title}' @ {company} → {status}")
+                else:
+                    log.warning(f"Sheets log unexpected response (status={resp.status}): {raw[:200]}")
+        except Exception as e:
+            log.warning(f"Sheets log failed: {e}")
+
+    threading.Thread(target=_post, daemon=True).start()

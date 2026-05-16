@@ -16,7 +16,7 @@ from pathlib import Path
 from fastapi import FastAPI, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, List
 
 app = FastAPI(title="ApplyPilot Backend")
@@ -61,13 +61,13 @@ class Profile(BaseModel):
     resume_text: str = ""
     target_roles: List[str] = [""]
     target_location: str = "India"
-    experience_years: int = 3
-    experience_months: int = 0
+    experience_years: int = Field(default=3, ge=0, le=50)
+    experience_months: int = Field(default=0, ge=0, le=11)
     current_ctc: str = ""
     expected_ctc: str = ""
     notice_period: str = "30 days"
-    min_match_score: int = 70
-    max_applications: int = 20
+    min_match_score: int = Field(default=70, ge=0, le=100)
+    max_applications: int = Field(default=20, ge=1, le=500)
     groq_api_key: str = ""
     sheets_webhook_url: str = ""
     sheets_webhook_secret: str = ""
@@ -248,9 +248,12 @@ def health():
 @app.post("/save-profile")
 def save_profile(profile: Profile):
     """Save profile → writes config.py into the bot folder."""
+    webhook = profile.sheets_webhook_url
+    if webhook and not webhook.startswith("https://script.google.com/"):
+        raise HTTPException(status_code=422, detail="sheets_webhook_url must be a Google Apps Script URL (https://script.google.com/...)")
     try:
-        path = write_config(profile)
-        return {"ok": True, "config_path": str(path)}
+        write_config(profile)
+        return {"ok": True}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -321,4 +324,5 @@ if __name__ == "__main__":
     import uvicorn
     print(f"\n✅ ApplyPilot backend running at http://localhost:8000")
     print(f"   Bot directory: {BOT_DIR}\n")
-    uvicorn.run(app, host="0.0.0.0", port=8000, reload=False)
+    host = os.getenv("BIND_HOST", "127.0.0.1")
+    uvicorn.run(app, host=host, port=8000, reload=False)

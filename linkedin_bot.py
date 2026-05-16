@@ -32,13 +32,6 @@ import sheets_logger
 
 log = logging.getLogger(__name__)
 
-log_file = f"applications_{datetime.now().strftime('%Y%m%d_%H%M')}.log"
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[logging.FileHandler(log_file), logging.StreamHandler()]
-)
-
 
 def sleep(min_s=1.0, max_s=3.0):
     time.sleep(random.uniform(min_s, max_s))
@@ -280,7 +273,10 @@ def apply_to_job(driver, job_card, applied_titles: set) -> bool:
         min_score = config.AI.get("min_match_score", 0)
         if config.AI.get("enabled", True) and min_score > 0:
             result = ai_engine.score_job(job_title, jd_text)
-            score  = result.get("score", 50)
+            score  = result.get("score", -1)
+            if score == -1:
+                log.warning(f"  AI scoring failed for '{job_title}' — skipping to be safe")
+                return False
             if score < min_score:
                 log.info(f"  ✗ Skipped [{score}%]: {full_title}")
                 sheets_logger.log_application(
@@ -331,12 +327,13 @@ def save_log(applied_titles):
 
 def run_linkedin_bot():
     log.info("─── LINKEDIN BOT STARTED ───")
-    driver         = get_driver()
+    driver         = None
     applied_titles = set()
     total_applied  = 0
     max_apps       = config.SEARCH["max_applications"]
 
     try:
+        driver = get_driver()
         linkedin_login(driver)
 
         for keyword in config.SEARCH["keywords"]:
@@ -366,6 +363,9 @@ def run_linkedin_bot():
                     except Exception as e:
                         log.error(f"Card error: {e}")
 
+                max_pages = config.SEARCH.get("max_pages", 20)
+                if page >= max_pages:
+                    break
                 try:
                     driver.find_element(By.CSS_SELECTOR, "button[aria-label='View next page']").click()
                     sleep(3, 5)
@@ -379,7 +379,8 @@ def run_linkedin_bot():
     finally:
         save_log(applied_titles)
         log.info(f"─── LinkedIn done: {total_applied} applied ───")
-        driver.quit()
+        if driver is not None:
+            driver.quit()
 
 
 if __name__ == "__main__":
