@@ -309,7 +309,7 @@ function App() {
                   </p>
                   <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
                     <a
-                      href="https://github.com/ShivUP32/job-apply-agent/archive/refs/heads/main.zip"
+                      href="https://raw.githubusercontent.com/ShivUP32/job-apply-agent/main/extension.zip"
                       style={{ display: "inline-flex", alignItems: "center", gap: 7, background: "#4ade80", color: "#000", borderRadius: 7, padding: "9px 20px", fontWeight: 600, fontSize: 13, textDecoration: "none", fontFamily: "inherit" }}
                     >
                       ⬇ Download ApplyPilot.zip
@@ -499,9 +499,9 @@ function App() {
               </Row>
               <div style={{ flex: 1 }}>
                 <label style={labelStyle}>Max applications per day: <strong style={{ color: "#4ade80" }}>{profile.max_applications}</strong></label>
-                <input type="range" min={5} max={50} value={profile.max_applications} onChange={e => p("max_applications", parseInt(e.target.value))}
+                <input type="range" min={1} max={50} value={profile.max_applications} onChange={e => p("max_applications", parseInt(e.target.value))}
                   style={{ width: "100%", accentColor: "#4ade80", marginTop: 8 }} />
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#7a849e" }}><span>5</span><span>50</span></div>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#7a849e" }}><span>1</span><span>50</span></div>
               </div>
             </Section>
 
