@@ -15,7 +15,8 @@ from pathlib import Path
 
 from fastapi import FastAPI, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional, List
 
@@ -317,8 +318,27 @@ def get_status():
     }
 
 
+# ── Frontend static files ──────────────────────────────────────
+
+_FRONTEND_DIR = Path(__file__).parent.parent / "frontend" / "dist"
+
+if _FRONTEND_DIR.exists():
+    app.mount("/assets", StaticFiles(directory=_FRONTEND_DIR / "assets"), name="assets")
+
+    @app.get("/")
+    def serve_index():
+        return FileResponse(_FRONTEND_DIR / "index.html")
+
+    @app.get("/{full_path:path}")
+    def serve_spa(full_path: str):
+        # Serve index.html for any unknown path so the SPA router handles it.
+        # API routes defined above take priority because FastAPI matches them first.
+        return FileResponse(_FRONTEND_DIR / "index.html")
+
+
 if __name__ == "__main__":
     import uvicorn
-    print(f"\n✅ ApplyPilot backend running at http://localhost:8000")
+    print(f"\n✅ ApplyPilot running at http://localhost:8000")
+    print(f"   Open that URL in your browser to use the app.")
     print(f"   Bot directory: {BOT_DIR}\n")
     uvicorn.run(app, host="0.0.0.0", port=8000, reload=False)

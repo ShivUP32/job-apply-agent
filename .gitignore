@@ -11,6 +11,10 @@ dist/
 build/
 *.egg
 
+# Keep the built frontend so the backend can serve it without requiring Node.js
+!frontend/dist/
+!frontend/dist/**
+
 # Virtual environments
 venv/
 env/

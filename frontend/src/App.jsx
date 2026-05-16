@@ -3,7 +3,8 @@ import * as pdfjsLib from "pdfjs-dist";
 import pdfjsWorker from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
-const API = (import.meta.env.VITE_API_URL || "http://localhost:8000").replace(/\/$/, "");
+// Empty string = relative URLs (same origin). Works for both local backend and any custom deployment.
+const API = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
 
 // Central webhook URL — deploy the Apps Script below once, then replace this value with your deployment URL
 const DEFAULT_WEBHOOK_URL = import.meta.env.VITE_SHEETS_WEBHOOK_URL || "";
