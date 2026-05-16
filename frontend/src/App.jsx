@@ -3,14 +3,7 @@ import * as pdfjsLib from "pdfjs-dist";
 import pdfjsWorker from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
-// Empty string = relative URLs (same origin). Works for both local backend and any custom deployment.
-const API = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
-
-// Central webhook URL — deploy the Apps Script below once, then replace this value with your deployment URL
-const DEFAULT_WEBHOOK_URL = import.meta.env.VITE_SHEETS_WEBHOOK_URL || "";
-
-// Secret token sent with every request — must match WEBHOOK_SECRET in Apps Script Properties
-const WEBHOOK_SECRET = import.meta.env.VITE_SHEETS_WEBHOOK_SECRET || "";
+const EXT_URL = "https://job-hunt-agent-iota.vercel.app"; // keep in sync with manifest host_permissions
 
 const APPS_SCRIPT_CODE = `// SETUP — Script Properties (⚙ Project Settings → Script Properties):
 //   WEBHOOK_SECRET  = <your long random secret>
@@ -102,7 +95,7 @@ function App() {
   const [running, setRunning] = useState(false);
   const [logs, setLogs] = useState([]);
   const [stats, setStats] = useState({ applied_today: 0, applied_jobs: [] });
-  const [backendOk, setBackendOk] = useState(null);
+  const [extInstalled, setExtInstalled] = useState(() => !!window.__APPLYPILOT_INSTALLED);
   const [saving, setSaving] = useState(false);
   const [selectedPlatforms, setSelectedPlatforms] = useState(["naukri", "linkedin"]);
   const [schedule, setSchedule] = useState("manual");
@@ -114,7 +107,6 @@ function App() {
     portfolio_url: "", github_url: "", other_url_1: "", other_url_2: "",
     resume_text: "",
     resume_pdf_name: "",
-    resume_pdf_data: "",
     target_roles: [""],
     target_location: "India",
     experience_years: 3,
@@ -123,46 +115,28 @@ function App() {
     notice_period: "30 days",
     min_match_score: 70,
     max_applications: 20,
+    groq_api_key: "",
     google_sheet_url: "",
   });
 
-  // Poll health until connected, then stop
+  // Listen for extension messages
   useEffect(() => {
-    let cancelled = false;
-    const check = () => {
-      fetch(`${API}/health`).then(r => r.json()).then(() => {
-        if (!cancelled) setBackendOk(true);
-      }).catch(() => {
-        if (!cancelled) setBackendOk(false);
-      });
-    };
-    check();
-    const t = setInterval(check, 5000);
-    return () => { cancelled = true; clearInterval(t); };
-  }, []);
-
-  // Poll logs + status when running
-  useEffect(() => {
-    if (!running) return;
-    const t = setInterval(async () => {
-      try {
-        const [l, s] = await Promise.all([
-          fetch(`${API}/logs`).then(r => r.json()),
-          fetch(`${API}/status`).then(r => r.json()),
-        ]);
-        setLogs(l.logs || []);
-        setRunning(l.running);
-        setStats(s);
+    const handler = (e) => {
+      if (!e.data?.type) return;
+      if (e.data.type === "APPLYPILOT_READY") {
+        setExtInstalled(true);
+      }
+      if (e.data.type === "APPLYPILOT_STATE") {
+        setRunning(!!e.data.running);
+        if (e.data.logs)  { setLogs(e.data.logs); }
+        if (e.data.stats) { setStats(e.data.stats); }
         if (logsRef.current) logsRef.current.scrollTop = logsRef.current.scrollHeight;
-      } catch {}
-    }, 2000);
-    return () => clearInterval(t);
-  }, [running]);
-
-  // Fetch status + logs on mount
-  useEffect(() => {
-    fetch(`${API}/status`).then(r => r.json()).then(s => { setStats(s); setRunning(s.running); }).catch(() => {});
-    fetch(`${API}/logs`).then(r => r.json()).then(l => { setLogs(l.logs || []); setRunning(l.running); }).catch(() => {});
+      }
+    };
+    window.addEventListener("message", handler);
+    // Re-check in case bridge.js already ran before this effect
+    setTimeout(() => { if (window.__APPLYPILOT_INSTALLED) setExtInstalled(true); }, 200);
+    return () => window.removeEventListener("message", handler);
   }, []);
 
   const p = (k, v) => setProfile(prev => ({ ...prev, [k]: v }));
@@ -208,7 +182,7 @@ function App() {
     }
   };
 
-  const saveProfile = async () => {
+  const saveProfile = () => {
     if (!profile.first_name.trim() || !profile.email.trim()) {
       alert("First name and email are required before saving.");
       return;
@@ -217,33 +191,38 @@ function App() {
       alert("Add at least one target job title before saving.");
       return;
     }
+    if (!extInstalled) {
+      alert("Please install the ApplyPilot browser extension first.");
+      return;
+    }
     setSaving(true);
-    try {
-      const payload = { ...profile, platforms: selectedPlatforms, sheets_webhook_url: DEFAULT_WEBHOOK_URL, sheets_webhook_secret: WEBHOOK_SECRET };
-      const r = await fetch(`${API}/save-profile`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const d = await r.json();
-      if (d.ok) { setSaved(true); setTimeout(() => setSaved(false), 3000); }
-    } catch (e) { alert("Could not reach backend. Is it running?"); }
-    setSaving(false);
+    const payload = { ...profile, platforms: selectedPlatforms };
+    window.postMessage({ type: "APPLYPILOT_SAVE_PROFILE", profile: payload }, "*");
+    // Listen for ack
+    const ack = (e) => {
+      if (e.data?.type === "APPLYPILOT_SAVED") {
+        window.removeEventListener("message", ack);
+        setSaving(false);
+        setSaved(true);
+        setTimeout(() => setSaved(false), 3000);
+      }
+    };
+    window.addEventListener("message", ack);
+    // Timeout fallback
+    setTimeout(() => { window.removeEventListener("message", ack); setSaving(false); }, 3000);
   };
 
-  const startBot = async () => {
+  const startBot = () => {
+    if (!extInstalled) { alert("Please install the ApplyPilot extension first."); return; }
     setTab("logs");
     setLogs([]);
-    const r = await fetch(`${API}/run`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(selectedPlatforms),
-    }).then(r => r.json()).catch(() => ({ ok: false }));
-    if (r.ok) setRunning(true);
+    const payload = { ...profile, platforms: selectedPlatforms };
+    window.postMessage({ type: "APPLYPILOT_RUN", platforms: selectedPlatforms, profile: payload }, "*");
+    setRunning(true);
   };
 
-  const stopBot = async () => {
-    await fetch(`${API}/stop`, { method: "POST" }).catch(() => {});
+  const stopBot = () => {
+    window.postMessage({ type: "APPLYPILOT_STOP" }, "*");
     setRunning(false);
   };
 
@@ -266,15 +245,33 @@ function App() {
           ))}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <div style={{ width: 8, height: 8, borderRadius: "50%", background: backendOk === null ? "#7a849e" : backendOk ? "#4ade80" : "#f87171", boxShadow: backendOk ? "0 0 8px #4ade8088" : "none" }} />
-          <span style={{ fontSize: 12, color: "#7a849e" }}>{backendOk === null ? "checking..." : backendOk ? "backend connected" : "backend offline"}</span>
+          <div style={{ width: 8, height: 8, borderRadius: "50%", background: extInstalled ? "#4ade80" : "#f87171", boxShadow: extInstalled ? "0 0 8px #4ade8088" : "none" }} />
+          <span style={{ fontSize: 12, color: extInstalled ? "#4ade80" : "#f87171" }}>
+            {extInstalled ? "extension connected" : "extension not detected"}
+          </span>
         </div>
         {running ? (
           <button onClick={stopBot} style={{ background: "#3f1515", border: "1px solid #f87171", color: "#f87171", borderRadius: 6, padding: "6px 16px", cursor: "pointer", fontSize: 13, fontFamily: "inherit" }}>⏹ Stop</button>
         ) : (
-          <button onClick={startBot} style={{ background: "#0f2e1a", border: "1px solid #4ade80", color: "#4ade80", borderRadius: 6, padding: "6px 16px", cursor: "pointer", fontSize: 13, fontFamily: "inherit", opacity: backendOk ? 1 : 0.4 }}>▶ Run now</button>
+          <button onClick={startBot} style={{ background: "#0f2e1a", border: "1px solid #4ade80", color: "#4ade80", borderRadius: 6, padding: "6px 16px", cursor: "pointer", fontSize: 13, fontFamily: "inherit", opacity: extInstalled ? 1 : 0.4 }}>▶ Run now</button>
         )}
       </nav>
+
+      {/* Install extension banner */}
+      {!extInstalled && (
+        <div style={{ background: "#1a0f00", borderBottom: "1px solid #f59e0b40", padding: "12px 2rem", display: "flex", alignItems: "center", gap: 16 }}>
+          <span style={{ fontSize: 13, color: "#fbbf24" }}>
+            ⚡ ApplyPilot needs its browser extension to run jobs on your behalf.
+          </span>
+          <a
+            href="https://github.com/ShivUP32/job-apply-agent/tree/main/extension"
+            target="_blank" rel="noopener noreferrer"
+            style={{ fontSize: 12, color: "#fbbf24", border: "1px solid #f59e0b60", borderRadius: 5, padding: "4px 12px", textDecoration: "none", whiteSpace: "nowrap" }}
+          >
+            Install extension →
+          </a>
+        </div>
+      )}
 
       <div style={{ maxWidth: 860, margin: "0 auto", padding: "2rem 1.5rem" }}>
 
@@ -385,6 +382,19 @@ function App() {
               <textarea value={profile.resume_text} onChange={e => p("resume_text", e.target.value)}
                 placeholder={"YOUR NAME | Bangalore | you@email.com\n\nSUMMARY\nProduct Manager with 4 years...\n\nEXPERIENCE\nSenior PM — Acme Corp (2022–Present)\n- Led onboarding redesign, reduced time-to-value by 60%\n\nSKILLS\nSQL, Figma, Jira, roadmapping, A/B testing"}
                 style={{ ...inputStyle, height: 200, resize: "vertical", fontFamily: "monospace", fontSize: 12 }} />
+            </Section>
+
+            <Section title="AI Job Matching (optional)">
+              <Field
+                label="Groq API key"
+                value={profile.groq_api_key}
+                onChange={v => p("groq_api_key", v)}
+                placeholder="gsk_..."
+                type="password"
+              />
+              <p style={{ fontSize: 12, color: "#7a849e", marginTop: 8 }}>
+                Free at <strong style={{ color: "#e2e6f0" }}>console.groq.com</strong>. The extension uses it to score each job against your resume and skip poor matches. Without a key it falls back to keyword matching.
+              </p>
             </Section>
 
             <Section title="Google Sheets Setup">
@@ -673,17 +683,17 @@ while True:
                 <span style={{ fontSize: 13, color: running ? "#4ade80" : "#7a849e" }}>{running ? "running..." : "idle"}</span>
               </div>
             </div>
-            {backendOk === false && (
+            {!extInstalled && (
               <div style={{ marginBottom: 12, padding: "10px 16px", background: "#1f0a0a", border: "1px solid #f8717140", borderRadius: 8, fontSize: 13, color: "#f87171" }}>
-                ⚠ Backend offline — run the ApplyPilot script on your computer, then wait a moment for this page to reconnect automatically.
+                ⚠ Extension not detected — install the ApplyPilot extension and refresh this page. Then log in to your job sites in Chrome before pressing Run.
               </div>
             )}
             <div ref={logsRef} style={{
               background: "#080a0e", border: "1px solid #1e2330", borderRadius: 10,
               padding: "16px", height: 420, overflowY: "auto", fontFamily: "monospace", fontSize: 12,
             }}>
-              {logs.length === 0 && backendOk === false && <span style={{ color: "#f87171" }}>Backend not connected. No logs to show.</span>}
-              {logs.length === 0 && backendOk !== false && <span style={{ color: "#3a4060" }}>No logs yet — press Run to start the agent.</span>}
+              {logs.length === 0 && !extInstalled && <span style={{ color: "#f87171" }}>Extension not connected. Install it and refresh.</span>}
+              {logs.length === 0 && extInstalled && <span style={{ color: "#3a4060" }}>No logs yet — press Run to start the agent.</span>}
               {logs.map((l, i) => (
                 <div key={i} style={{ marginBottom: 4, display: "flex", gap: 12 }}>
                   <span style={{ color: "#3a4060", flexShrink: 0 }}>{l.time}</span>
