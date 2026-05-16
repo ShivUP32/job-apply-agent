@@ -1,7 +1,8 @@
 // Indeed (India) job application automation
 
 (async function () {
-  const { sleep, waitFor, log, isRunning, scoreJob } = window.__AP__;
+  const { sleep, waitFor, log, isRunning } = window.__AP__;
+  const scoreJob = window.__AP__.scoreJob.bind(window.__AP__);
   const PLATFORM = "indeed";
 
   async function getProfile() {

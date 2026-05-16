@@ -10,7 +10,7 @@ function ts() {
 }
 
 async function addLog(msg) {
-  const { logs = [] } = await chrome.storage.local.get("logs");
+  const { logs = [] } = await chrome.storage.local.get(["logs"]);
   logs.push({ time: ts(), msg });
   if (logs.length > 500) logs.splice(0, logs.length - 500);
   await chrome.storage.local.set({ logs });
@@ -85,12 +85,34 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   const supported = ["linkedin", "naukri", "indeed", "glassdoor", "foundit"];
   if (!supported.includes(currentPlatform)) return;
 
+  // Guard against re-injecting into a tab that already has scripts running
+  // (happens on LinkedIn SPA navigations and Naukri tab.update calls)
   try {
+    const [{ result: alreadyInjected }] = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => !!window.__AP__,
+    });
+    if (alreadyInjected) return;
+
     await chrome.scripting.executeScript({ target: { tabId }, files: ["content/common.js"] });
     await chrome.scripting.executeScript({ target: { tabId }, files: [`content/${currentPlatform}.js`] });
   } catch (e) {
     await addLog(`⚠ Could not inject script for ${currentPlatform}: ${e.message}`);
   }
+});
+
+// ── Clean up if user manually closes the active tab ─────────────────────────
+
+chrome.tabs.onRemoved.addListener(async (tabId) => {
+  const { activeTabId, running, platformIndex = 0 } =
+    await get(["activeTabId", "running", "platformIndex"]);
+
+  if (!running || tabId !== activeTabId) return;
+
+  await addLog("⚠ Job tab was closed — advancing to next platform");
+  await chrome.storage.local.set({ activeTabId: null, naukriUrls: null, naukriIndex: 0, naukriApplied: 0 });
+  await chrome.storage.local.set({ platformIndex: platformIndex + 1 });
+  await openNextPlatform();
 });
 
 // ── Message handler ──────────────────────────────────────────────────────────
@@ -108,12 +130,22 @@ async function handle(msg) {
       return { ok: true };
 
     case "RUN": {
+      const today = new Date().toDateString();
+      const { stats: existingStats = {} } = await get(["stats"]);
+      // Only reset the daily counter when the calendar day has changed
+      const stats = existingStats.date === today
+        ? existingStats
+        : { applied_today: 0, applied_jobs: [], date: today };
+
       await chrome.storage.local.set({
         running: true,
         platforms: msg.platforms,
         platformIndex: 0,
         logs: [],
-        stats: { applied_today: 0, applied_jobs: [] },
+        stats,
+        naukriUrls: null,
+        naukriIndex: 0,
+        naukriApplied: 0,
         ...(msg.profile ? { profile: msg.profile } : {}),
       });
       await addLog(`▶ ApplyPilot starting — ${msg.platforms.join(", ")}`);
@@ -122,9 +154,12 @@ async function handle(msg) {
     }
 
     case "STOP": {
-      const { activeTabId } = await get("activeTabId");
+      const { activeTabId } = await get(["activeTabId"]);
       if (activeTabId) { try { await chrome.tabs.remove(activeTabId); } catch {} }
-      await chrome.storage.local.set({ running: false, currentPlatform: null, activeTabId: null });
+      await chrome.storage.local.set({
+        running: false, currentPlatform: null, activeTabId: null,
+        naukriUrls: null, naukriIndex: 0, naukriApplied: 0,
+      });
       await addLog("⛔ Stopped by user");
       return { ok: true };
     }
@@ -142,8 +177,43 @@ async function handle(msg) {
       return { ok: true };
     }
 
+    // Naukri uses background-driven navigation so content scripts survive page loads
+    case "NAUKRI_NEXT": {
+      let { naukriUrls = [], naukriIndex = 0, naukriApplied = 0, profile, activeTabId } =
+        await get(["naukriUrls", "naukriIndex", "naukriApplied", "profile", "activeTabId"]);
+
+      if (msg.applied) {
+        naukriApplied++;
+        await chrome.storage.local.set({ naukriApplied });
+      }
+
+      const maxApps = profile?.max_applications || 20;
+
+      if (!naukriUrls.length || naukriIndex >= naukriUrls.length || naukriApplied >= maxApps) {
+        await addLog(`Naukri: done — applied to ${naukriApplied} job${naukriApplied !== 1 ? "s" : ""}`);
+        await chrome.storage.local.set({ naukriUrls: null, naukriIndex: 0, naukriApplied: 0 });
+        if (activeTabId) { try { await chrome.tabs.remove(activeTabId); } catch {} }
+        const { platformIndex = 0 } = await get(["platformIndex"]);
+        await chrome.storage.local.set({ platformIndex: platformIndex + 1, activeTabId: null });
+        await openNextPlatform();
+      } else {
+        const url = naukriUrls[naukriIndex];
+        await chrome.storage.local.set({ naukriIndex: naukriIndex + 1 });
+        // Navigate the existing tab — onUpdated will re-inject naukri.js in apply mode
+        await chrome.tabs.update(activeTabId, { url });
+      }
+      return { ok: true };
+    }
+
     case "JOB_APPLIED": {
-      const { stats = { applied_today: 0, applied_jobs: [] } } = await get("stats");
+      const today = new Date().toDateString();
+      const { stats = { applied_today: 0, applied_jobs: [], date: today } } = await get(["stats"]);
+      // Reset counter if we've crossed midnight
+      if (stats.date !== today) {
+        stats.applied_today = 0;
+        stats.applied_jobs = [];
+        stats.date = today;
+      }
       stats.applied_today++;
       stats.applied_jobs.push(msg.job);
       if (stats.applied_jobs.length > 100) stats.applied_jobs.splice(0, stats.applied_jobs.length - 100);

@@ -122,6 +122,8 @@ function App() {
   // Listen for extension messages
   useEffect(() => {
     const handler = (e) => {
+      // Only accept messages from the same page origin (blocks malicious iframes/ads)
+      if (e.origin !== window.location.origin) return;
       if (!e.data?.type) return;
       if (e.data.type === "APPLYPILOT_READY") {
         setExtInstalled(true);
@@ -187,6 +189,10 @@ function App() {
       alert("First name and email are required before saving.");
       return;
     }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(profile.email)) {
+      alert("Please enter a valid email address.");
+      return;
+    }
     if (!profile.target_roles.some(r => r.trim())) {
       alert("Add at least one target job title before saving.");
       return;
@@ -197,19 +203,22 @@ function App() {
     }
     setSaving(true);
     const payload = { ...profile, platforms: selectedPlatforms };
-    window.postMessage({ type: "APPLYPILOT_SAVE_PROFILE", profile: payload }, "*");
-    // Listen for ack
+    // Cancel any previous pending ack listener before registering a new one
+    if (window.__apAckRef) window.removeEventListener("message", window.__apAckRef);
     const ack = (e) => {
+      if (e.origin !== window.location.origin) return;
       if (e.data?.type === "APPLYPILOT_SAVED") {
         window.removeEventListener("message", ack);
+        window.__apAckRef = null;
         setSaving(false);
         setSaved(true);
         setTimeout(() => setSaved(false), 3000);
       }
     };
+    window.__apAckRef = ack;
     window.addEventListener("message", ack);
-    // Timeout fallback
-    setTimeout(() => { window.removeEventListener("message", ack); setSaving(false); }, 3000);
+    window.postMessage({ type: "APPLYPILOT_SAVE_PROFILE", profile: payload }, window.location.origin);
+    setTimeout(() => { window.removeEventListener("message", ack); window.__apAckRef = null; setSaving(false); }, 3000);
   };
 
   const startBot = () => {
@@ -217,12 +226,21 @@ function App() {
     setTab("logs");
     setLogs([]);
     const payload = { ...profile, platforms: selectedPlatforms };
-    window.postMessage({ type: "APPLYPILOT_RUN", platforms: selectedPlatforms, profile: payload }, "*");
-    setRunning(true);
+    // Wait for RUN_ACK before updating running state — avoids stuck UI if SW is dead
+    const ack = (e) => {
+      if (e.origin !== window.location.origin) return;
+      if (e.data?.type === "APPLYPILOT_RUN_ACK") {
+        window.removeEventListener("message", ack);
+        if (e.data.ok) setRunning(true);
+      }
+    };
+    window.addEventListener("message", ack);
+    setTimeout(() => window.removeEventListener("message", ack), 4000);
+    window.postMessage({ type: "APPLYPILOT_RUN", platforms: selectedPlatforms, profile: payload }, window.location.origin);
   };
 
   const stopBot = () => {
-    window.postMessage({ type: "APPLYPILOT_STOP" }, "*");
+    window.postMessage({ type: "APPLYPILOT_STOP" }, window.location.origin);
     setRunning(false);
   };
 
@@ -253,7 +271,7 @@ function App() {
         {running ? (
           <button onClick={stopBot} style={{ background: "#3f1515", border: "1px solid #f87171", color: "#f87171", borderRadius: 6, padding: "6px 16px", cursor: "pointer", fontSize: 13, fontFamily: "inherit" }}>⏹ Stop</button>
         ) : (
-          <button onClick={startBot} style={{ background: "#0f2e1a", border: "1px solid #4ade80", color: "#4ade80", borderRadius: 6, padding: "6px 16px", cursor: "pointer", fontSize: 13, fontFamily: "inherit", opacity: extInstalled ? 1 : 0.4 }}>▶ Run now</button>
+          <button onClick={startBot} disabled={!extInstalled} style={{ background: "#0f2e1a", border: "1px solid #4ade80", color: "#4ade80", borderRadius: 6, padding: "6px 16px", cursor: extInstalled ? "pointer" : "not-allowed", fontSize: 13, fontFamily: "inherit", opacity: extInstalled ? 1 : 0.4 }}>▶ Run now</button>
         )}
       </nav>
 

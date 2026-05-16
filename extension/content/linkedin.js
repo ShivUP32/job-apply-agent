@@ -2,7 +2,8 @@
 // Injected by background.js when the LinkedIn jobs tab finishes loading.
 
 (async function () {
-  const { sleep, waitFor, fillInput, log, isRunning, scoreJob } = window.__AP__;
+  const { sleep, waitFor, fillInput, log, isRunning } = window.__AP__;
+  const scoreJob = window.__AP__.scoreJob.bind(window.__AP__);
   const PLATFORM = "linkedin";
 
   async function getProfile() {

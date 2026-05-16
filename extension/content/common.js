@@ -84,6 +84,10 @@ window.__AP__ = {
           temperature: 0,
         }),
       });
+      if (!res.ok) {
+        this.log(`⚠ Groq API error ${res.status} — falling back to keyword scoring`);
+        return this.keywordScore(title, description, profile);
+      }
       const d = await res.json();
       const n = parseInt(d.choices?.[0]?.message?.content?.trim());
       return isNaN(n) ? this.keywordScore(title, description, profile) : n;
