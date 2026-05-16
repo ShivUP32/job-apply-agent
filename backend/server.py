@@ -17,8 +17,8 @@ from fastapi import FastAPI, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
-from typing import Optional, List
+from pydantic import BaseModel, Field
+from typing import List, Literal
 
 app = FastAPI(title="ApplyPilot Backend")
 
@@ -338,7 +338,8 @@ if _FRONTEND_DIR.exists():
 
 if __name__ == "__main__":
     import uvicorn
+    host = os.getenv("BIND_HOST", "127.0.0.1")
     print(f"\n✅ ApplyPilot running at http://localhost:8000")
     print(f"   Open that URL in your browser to use the app.")
     print(f"   Bot directory: {BOT_DIR}\n")
-    uvicorn.run(app, host="0.0.0.0", port=8000, reload=False)
+    uvicorn.run(app, host=host, port=8000, reload=False)
