@@ -312,7 +312,7 @@ function App() {
                       href="https://raw.githubusercontent.com/ShivUP32/job-apply-agent/main/extension.zip"
                       style={{ display: "inline-flex", alignItems: "center", gap: 7, background: "#4ade80", color: "#000", borderRadius: 7, padding: "9px 20px", fontWeight: 600, fontSize: 13, textDecoration: "none", fontFamily: "inherit" }}
                     >
-                      ⬇ Download ApplyPilot.zip
+                      ⬇ Download Extension
                     </a>
                     <a
                       href="https://github.com/ShivUP32/job-apply-agent/tree/main/extension"
@@ -323,7 +323,7 @@ function App() {
                     </a>
                   </div>
                   <p style={{ fontSize: 12, color: "#3a4060", marginTop: 10 }}>
-                    After downloading, unzip the file. You'll see a folder called <code style={{ background: "#0b0d11", padding: "1px 5px", borderRadius: 3, color: "#7a849e" }}>job-apply-agent-main</code> — the extension is inside the <code style={{ background: "#0b0d11", padding: "1px 5px", borderRadius: 3, color: "#7a849e" }}>extension/</code> subfolder.
+                    After downloading, unzip the file. You'll see a folder called <code style={{ background: "#0b0d11", padding: "1px 5px", borderRadius: 3, color: "#7a849e" }}>extension/</code> — load that folder into Chrome in the next step.
                   </p>
                 </div>
               </div>
