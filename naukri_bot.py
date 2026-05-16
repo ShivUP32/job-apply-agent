@@ -187,6 +187,7 @@ def apply_to_job(driver, job_card, applied_titles: set) -> bool:
         time.sleep(3)
 
         # ── Fill apply modal ─────────────────────────────────
+        submitted = False
         try:
             chat_inputs = driver.find_elements(
                 By.XPATH,
@@ -209,8 +210,14 @@ def apply_to_job(driver, job_card, applied_titles: set) -> bool:
             )
             submit_btn.click()
             time.sleep(2)
-        except Exception:
-            pass
+            submitted = True
+        except Exception as e:
+            log.warning(f"  Modal fill failed for '{job_title}': {e}")
+
+        if not submitted:
+            driver.close()
+            driver.switch_to.window(driver.window_handles[0])
+            return False
 
         log.info(f"  ✅ Applied: {job_title}")
         applied_titles.add(job_title)
@@ -239,18 +246,22 @@ def _should_apply(job_title: str, jd: str) -> tuple:
     if not config.AI.get("enabled", True) or min_score == 0:
         return True, 0, "AI off"
     result = ai_engine.score_job(job_title, jd)
-    score  = result.get("score", 50)
+    score  = result.get("score", -1)
+    if score == -1:
+        log.warning(f"  AI scoring failed for '{job_title}' — skipping to be safe")
+        return False, -1, "AI scoring failed"
     return score >= min_score, score, result.get("reason", "")
 
 
 def run_naukri_bot():
     log.info("─── NAUKRI BOT STARTED ───")
-    driver        = get_driver()
+    driver         = None
     applied_titles = set()
     total_applied  = 0
     max_apps       = config.SEARCH["max_applications"]
 
     try:
+        driver = get_driver()
         naukri_login(driver)
 
         for keyword in config.SEARCH["keywords"]:
@@ -278,6 +289,9 @@ def run_naukri_bot():
                     time.sleep(random.uniform(1.5, 3.5))
 
                 # Next page
+                max_pages = config.SEARCH.get("max_pages", 20)
+                if page_clicks >= max_pages:
+                    break
                 try:
                     nxt = driver.find_element(By.XPATH, "//a[contains(@class,'next') or contains(text(),'Next')]")
                     nxt.click()
@@ -290,7 +304,8 @@ def run_naukri_bot():
         log.error(f"Naukri Bot error: {e}")
     finally:
         log.info(f"─── Naukri done: {total_applied} applied ───")
-        driver.quit()
+        if driver is not None:
+            driver.quit()
 
 
 if __name__ == "__main__":

@@ -14,8 +14,17 @@ import sys
 import time
 import logging
 import argparse
+import importlib
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+
+# Pre-flight: config.py must exist before anything else imports it
+if importlib.util.find_spec("config") is None:
+    sys.exit(
+        "\nERROR: config.py not found.\n"
+        "Copy example.config to config.py and fill in your details, or\n"
+        "use the ApplyPilot UI to generate it automatically.\n"
+    )
 
 import config
 import system_config as ai_engine
@@ -64,11 +73,11 @@ def should_apply(job_title: str, job_description: str = "", company: str = "") -
         return True, 0, "AI scoring disabled"
 
     result = ai_engine.score_job(job_title, job_description)
-    score  = result.get("score", 50)
+    score  = result.get("score", -1)
     reason = result.get("reason", "")
 
     if score == -1:
-        return True, 0, "AI not available"
+        return False, -1, reason or "AI scoring failed — skipping"
 
     passes = score >= min_score
     log.info(f"  AI score: {score}% {'✓' if passes else '✗'} — {reason}")
