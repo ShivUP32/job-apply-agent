@@ -38,7 +38,7 @@ log = logging.getLogger(__name__)
 def print_banner():
     print("\n" + "="*62)
     print("   ✈  APPLYPILOT — Auto Job Apply Agent")
-    print("   By Shivam Singh — github.com/ShivUP32/job-hunt-agent")
+    print("   By Shivam Singh — github.com/ShivUP32/job-apply-agent")
     print("   + Groq AI scoring  + Google Sheets tracking")
     print("="*62)
     print("1.  LinkedIn Bot    (Easy Apply)")

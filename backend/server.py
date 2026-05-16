@@ -37,6 +37,13 @@ LOG_LINES = []          # in-memory log ring buffer
 RUNNING   = False
 PROCESS   = None
 
+_REDACT_PREFIXES = [str(Path.home()), str(BOT_DIR)]
+
+def _sanitise(line: str) -> str:
+    for prefix in _REDACT_PREFIXES:
+        line = line.replace(prefix, "~")
+    return line
+
 
 # ── Models ────────────────────────────────────────────────────
 
@@ -223,7 +230,7 @@ APIS = {{
 def _stream_process(proc):
     global RUNNING
     for line in iter(proc.stdout.readline, ""):
-        LOG_LINES.append({"time": datetime.now().strftime("%H:%M:%S"), "msg": line.rstrip()})
+        LOG_LINES.append({"time": datetime.now().strftime("%H:%M:%S"), "msg": _sanitise(line.rstrip())})
         if len(LOG_LINES) > 500:
             LOG_LINES.pop(0)
     proc.wait()
@@ -235,7 +242,7 @@ def _stream_process(proc):
 
 @app.get("/health")
 def health():
-    return {"status": "running", "bot_dir": str(BOT_DIR), "bot_running": RUNNING}
+    return {"status": "running", "bot_running": RUNNING}
 
 
 @app.post("/save-profile")
@@ -264,7 +271,8 @@ def run_bot(platforms: List[str] = None, background_tasks: BackgroundTasks = Non
         cmd = [sys.executable, str(BOT_DIR / "main.py"), "--auto"]
     RUNNING = True
     LOG_LINES.clear()
-    LOG_LINES.append({"time": datetime.now().strftime("%H:%M:%S"), "msg": f"Starting: {' '.join(cmd)}"})
+    platforms_label = ", ".join(selected) if selected else "all platforms"
+    LOG_LINES.append({"time": datetime.now().strftime("%H:%M:%S"), "msg": f"▶ Starting ApplyPilot — {platforms_label}"})
 
     PROCESS = subprocess.Popen(
         cmd,
