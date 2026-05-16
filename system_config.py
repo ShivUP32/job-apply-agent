@@ -106,7 +106,7 @@ RESUME: {resume}"""
         return json.loads(raw)
     except Exception as e:
         log.warning(f"Score parse error: {e}")
-        return {"score": 50, "reason": "Parse error", "missing": [], "keywords": []}
+        return {"score": -1, "reason": "Parse error", "missing": [], "keywords": []}
 
 
 def generate_cover_letter(job_title: str, company: str, job_description: str) -> str:
