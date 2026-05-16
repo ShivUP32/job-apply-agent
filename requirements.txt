@@ -1,0 +1,9 @@
+# ── Original repo dependencies (unchanged) ───────────────────
+selenium>=4.15.0
+webdriver-manager>=4.0.1
+
+# ── ApplyPilot additions ─────────────────────────────────────
+# No new heavy packages — system_config.py and sheets_logger.py
+# use Python stdlib only (urllib, json).
+# If you want to use Ollama locally instead of Groq, install:
+# langchain-ollama>=0.1.0
