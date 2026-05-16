@@ -3,7 +3,7 @@ import * as pdfjsLib from "pdfjs-dist";
 import pdfjsWorker from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
-const API = import.meta.env.VITE_API_URL || "http://localhost:8000";
+const ENV_API = import.meta.env.VITE_API_URL || "";
 
 // Central webhook URL — deploy the Apps Script below once, then replace this value with your deployment URL
 const DEFAULT_WEBHOOK_URL = import.meta.env.VITE_SHEETS_WEBHOOK_URL || "";
@@ -95,6 +95,10 @@ function safeSheetUrl(url) {
   } catch { return null; }
 }
 
+function getStoredUrl() {
+  try { return localStorage.getItem("applypilot_api_url") || ""; } catch { return ""; }
+}
+
 function App() {
   const [tab, setTab] = useState("profile");
   const [saved, setSaved] = useState(false);
@@ -105,7 +109,12 @@ function App() {
   const [saving, setSaving] = useState(false);
   const [selectedPlatforms, setSelectedPlatforms] = useState(["naukri", "linkedin"]);
   const [schedule, setSchedule] = useState("manual");
+  const [backendUrl, setBackendUrl] = useState(() => ENV_API || getStoredUrl());
+  const [urlDraft, setUrlDraft] = useState(() => ENV_API || getStoredUrl());
+  const [showUrlInput, setShowUrlInput] = useState(false);
   const logsRef = useRef(null);
+
+  const API = backendUrl.replace(/\/$/, "") || "http://localhost:8000";
 
   const [profile, setProfile] = useState({
     first_name: "", last_name: "", email: "", phone: "",
@@ -125,10 +134,11 @@ function App() {
     google_sheet_url: "",
   });
 
-  // Check backend health
+  // Check backend health whenever the URL changes
   useEffect(() => {
+    setBackendOk(null);
     fetch(`${API}/health`).then(r => r.json()).then(() => setBackendOk(true)).catch(() => setBackendOk(false));
-  }, []);
+  }, [API]);
 
   // Poll logs + status when running
   useEffect(() => {
@@ -148,11 +158,19 @@ function App() {
     return () => clearInterval(t);
   }, [running]);
 
-  // Also fetch status on mount
+  // Fetch status + logs on mount and when API URL changes
   useEffect(() => {
     fetch(`${API}/status`).then(r => r.json()).then(s => { setStats(s); setRunning(s.running); }).catch(() => {});
     fetch(`${API}/logs`).then(r => r.json()).then(l => { setLogs(l.logs || []); setRunning(l.running); }).catch(() => {});
-  }, []);
+  }, [API]);
+
+  const saveUrl = (url) => {
+    const trimmed = url.trim().replace(/\/$/, "");
+    setBackendUrl(trimmed);
+    setUrlDraft(trimmed);
+    setShowUrlInput(false);
+    try { if (trimmed) localStorage.setItem("applypilot_api_url", trimmed); } catch {}
+  };
 
   const p = (k, v) => setProfile(prev => ({ ...prev, [k]: v }));
 
@@ -254,9 +272,39 @@ function App() {
             }}>{label}</button>
           ))}
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <div style={{ width: 8, height: 8, borderRadius: "50%", background: backendOk === null ? "#7a849e" : backendOk ? "#4ade80" : "#f87171", boxShadow: backendOk ? "0 0 8px #4ade8088" : "none" }} />
-          <span style={{ fontSize: 12, color: "#7a849e" }}>{backendOk === null ? "checking..." : backendOk ? "backend connected" : "backend offline"}</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, position: "relative" }}>
+          <button onClick={() => { setShowUrlInput(v => !v); setUrlDraft(backendUrl); }} style={{
+            display: "flex", alignItems: "center", gap: 6, background: "none",
+            border: "1px solid " + (backendOk === null ? "#2a3148" : backendOk ? "#4ade8040" : "#f8717140"),
+            borderRadius: 6, padding: "4px 10px", cursor: "pointer", fontFamily: "inherit",
+          }}>
+            <div style={{ width: 7, height: 7, borderRadius: "50%", background: backendOk === null ? "#7a849e" : backendOk ? "#4ade80" : "#f87171", boxShadow: backendOk ? "0 0 6px #4ade8088" : "none", flexShrink: 0 }} />
+            <span style={{ fontSize: 12, color: backendOk === null ? "#7a849e" : backendOk ? "#4ade80" : "#f87171" }}>
+              {backendOk === null ? "checking…" : backendOk ? "connected" : "backend offline — click to connect"}
+            </span>
+          </button>
+          {showUrlInput && (
+            <div style={{ position: "absolute", top: 36, right: 0, zIndex: 100, background: "#13161f", border: "1px solid #2a3148", borderRadius: 10, padding: "16px", width: 340, boxShadow: "0 8px 32px #00000088" }}>
+              <div style={{ fontSize: 12, color: "#7a849e", marginBottom: 8 }}>
+                Paste your <strong style={{ color: "#e2e6f0" }}>ngrok URL</strong> (e.g. <code style={{ fontSize: 11 }}>https://abc.ngrok-free.app</code>).<br />
+                Start your local backend first: <code style={{ fontSize: 11 }}>python3 backend/server.py</code>
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input
+                  autoFocus
+                  value={urlDraft}
+                  onChange={e => setUrlDraft(e.target.value)}
+                  onKeyDown={e => { if (e.key === "Enter") saveUrl(urlDraft); if (e.key === "Escape") setShowUrlInput(false); }}
+                  placeholder="https://your-id.ngrok-free.app"
+                  style={{ ...inputStyle, flex: 1, fontSize: 12 }}
+                />
+                <button onClick={() => saveUrl(urlDraft)} style={{ background: "#4ade80", color: "#000", border: "none", borderRadius: 6, padding: "0 14px", cursor: "pointer", fontWeight: 600, fontSize: 13, fontFamily: "inherit", whiteSpace: "nowrap" }}>
+                  Connect
+                </button>
+              </div>
+              <button onClick={() => setShowUrlInput(false)} style={{ marginTop: 10, background: "none", border: "none", color: "#7a849e", fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>Cancel</button>
+            </div>
+          )}
         </div>
         {running ? (
           <button onClick={stopBot} style={{ background: "#3f1515", border: "1px solid #f87171", color: "#f87171", borderRadius: 6, padding: "6px 16px", cursor: "pointer", fontSize: 13, fontFamily: "inherit" }}>⏹ Stop</button>
@@ -664,7 +712,7 @@ while True:
             </div>
             {backendOk === false && (
               <div style={{ marginBottom: 12, padding: "10px 16px", background: "#1f0a0a", border: "1px solid #f8717140", borderRadius: 8, fontSize: 13, color: "#f87171" }}>
-                ⚠ Backend offline — start it with <code style={{ background: "#0b0d11", padding: "1px 6px", borderRadius: 3 }}>python3 backend/server.py</code> then refresh.
+                ⚠ Backend offline — start it with <code style={{ background: "#0b0d11", padding: "1px 6px", borderRadius: 3 }}>python3 backend/server.py</code> then expose it via ngrok and click <strong>"backend offline — click to connect"</strong> in the top-right to enter your URL.
               </div>
             )}
             <div ref={logsRef} style={{
