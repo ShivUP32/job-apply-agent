@@ -13,31 +13,37 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import FastAPI, BackgroundTasks, HTTPException
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import List, Literal
 
 app = FastAPI(title="ApplyPilot Backend")
 
-# Local backend — allow all origins by default; restrict via ALLOWED_ORIGINS env var in production
+# Restrict to the Vercel deployment via ALLOWED_ORIGINS env var; wildcard is dev-only
 _raw_origins = os.getenv("ALLOWED_ORIGINS", "*")
 _allowed_origins = ["*"] if _raw_origins == "*" else [o.strip() for o in _raw_origins.split(",")]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_credentials=False,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type"],
 )
 
 # ── State ─────────────────────────────────────────────────────
-BOT_DIR   = Path(os.getenv("BOT_DIR", str(Path.home() / "Desktop/job-hunt-agent")))
-LOG_LINES = []          # in-memory log ring buffer
+_bot_dir_raw = Path(os.getenv("BOT_DIR", str(Path.home() / "Desktop/job-hunt-agent")))
+if not str(_bot_dir_raw.resolve()).startswith(str(Path.home())):
+    raise RuntimeError(f"BOT_DIR must be inside the home directory, got: {_bot_dir_raw}")
+BOT_DIR   = _bot_dir_raw
+LOG_LINES = []
 RUNNING   = False
 PROCESS   = None
+_run_lock = threading.Lock()  # guards RUNNING / PROCESS from concurrent /run calls
 
-_REDACT_PREFIXES = [str(Path.home()), str(BOT_DIR)]
+# Sort longest prefix first so BOT_DIR (more specific) is replaced before home dir
+_REDACT_PREFIXES = sorted([str(Path.home()), str(BOT_DIR)], key=len, reverse=True)
 
 def _sanitise(line: str) -> str:
     for prefix in _REDACT_PREFIXES:
@@ -58,8 +64,8 @@ class Profile(BaseModel):
     github_url: str = ""
     other_url_1: str = ""
     other_url_2: str = ""
-    resume_text: str = ""
-    target_roles: List[str] = [""]
+    resume_text: str = Field(default="", max_length=100_000)
+    target_roles: List[str] = Field(default=[""], max_length=20)
     target_location: str = "India"
     experience_years: int = Field(default=3, ge=0, le=50)
     experience_months: int = Field(default=0, ge=0, le=11)
@@ -75,7 +81,7 @@ class Profile(BaseModel):
     platforms: List[str] = ["naukri", "linkedin"]
 
 class ScheduleRequest(BaseModel):
-    interval: str  # "daily_9am" | "twice_daily" | "weekdays" | "manual"
+    interval: Literal["daily_9am", "twice_daily", "weekdays", "manual"]
     platforms: List[str]
 
 
@@ -234,7 +240,9 @@ def _stream_process(proc):
         if len(LOG_LINES) > 500:
             LOG_LINES.pop(0)
     proc.wait()
-    RUNNING = False
+    with _run_lock:
+        if PROCESS is proc:  # only clear state if this is still the active process
+            RUNNING = False
     LOG_LINES.append({"time": datetime.now().strftime("%H:%M:%S"), "msg": "── Bot session ended ──"})
 
 
@@ -254,37 +262,43 @@ def save_profile(profile: Profile):
     try:
         write_config(profile)
         return {"ok": True}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        raise HTTPException(status_code=500, detail="Failed to write configuration")
 
 
 @app.post("/run")
-def run_bot(platforms: List[str] = None, background_tasks: BackgroundTasks = None):
+def run_bot(platforms: List[str] = None):
     """Start the bot for given platforms."""
     global RUNNING, PROCESS
-    if RUNNING:
-        return {"ok": False, "message": "Bot is already running"}
+    with _run_lock:
+        if RUNNING:
+            return {"ok": False, "message": "Bot is already running"}
 
-    valid = {"linkedin", "naukri", "indeed", "glassdoor", "foundit"}
-    selected = [p for p in (platforms or []) if p in valid]
+        valid = {"linkedin", "naukri", "indeed", "glassdoor", "foundit"}
+        selected = [p for p in (platforms or []) if p in valid]
 
-    if selected and len(selected) < len(valid):
-        cmd = [sys.executable, str(BOT_DIR / "main.py"), "--platforms", ",".join(selected)]
-    else:
-        cmd = [sys.executable, str(BOT_DIR / "main.py"), "--auto"]
-    RUNNING = True
-    LOG_LINES.clear()
-    platforms_label = ", ".join(selected) if selected else "all platforms"
-    LOG_LINES.append({"time": datetime.now().strftime("%H:%M:%S"), "msg": f"▶ Starting ApplyPilot — {platforms_label}"})
+        if selected and len(selected) < len(valid):
+            cmd = [sys.executable, str(BOT_DIR / "main.py"), "--platforms", ",".join(selected)]
+        else:
+            cmd = [sys.executable, str(BOT_DIR / "main.py"), "--auto"]
 
-    PROCESS = subprocess.Popen(
-        cmd,
-        cwd=str(BOT_DIR),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1
-    )
+        LOG_LINES.clear()
+        platforms_label = ", ".join(selected) if selected else "all platforms"
+        LOG_LINES.append({"time": datetime.now().strftime("%H:%M:%S"), "msg": f"▶ Starting ApplyPilot — {platforms_label}"})
+
+        try:
+            PROCESS = subprocess.Popen(
+                cmd,
+                cwd=str(BOT_DIR),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1
+            )
+        except FileNotFoundError:
+            raise HTTPException(status_code=500, detail="Bot executable not found — check BOT_DIR configuration")
+        RUNNING = True
+
     t = threading.Thread(target=_stream_process, args=(PROCESS,), daemon=True)
     t.start()
     return {"ok": True, "message": "Bot started"}
@@ -293,11 +307,12 @@ def run_bot(platforms: List[str] = None, background_tasks: BackgroundTasks = Non
 @app.post("/stop")
 def stop_bot():
     global RUNNING, PROCESS
-    if PROCESS and PROCESS.poll() is None:
-        PROCESS.terminate()
-        RUNNING = False
-        LOG_LINES.append({"time": datetime.now().strftime("%H:%M:%S"), "msg": "⛔ Bot stopped by user"})
-        return {"ok": True}
+    with _run_lock:
+        if PROCESS and PROCESS.poll() is None:
+            PROCESS.terminate()
+            RUNNING = False
+            LOG_LINES.append({"time": datetime.now().strftime("%H:%M:%S"), "msg": "⛔ Bot stopped by user"})
+            return {"ok": True}
     return {"ok": False, "message": "No bot running"}
 
 
@@ -322,7 +337,6 @@ def get_status():
 
 if __name__ == "__main__":
     import uvicorn
-    print(f"\n✅ ApplyPilot backend running at http://localhost:8000")
-    print(f"   Bot directory: {BOT_DIR}\n")
+    print(f"\n✅ ApplyPilot backend running at http://localhost:8000\n")
     host = os.getenv("BIND_HOST", "127.0.0.1")
     uvicorn.run(app, host=host, port=8000, reload=False)
